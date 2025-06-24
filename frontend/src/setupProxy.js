@@ -5,14 +5,21 @@ module.exports = function(app) {
   app.use(
     '/ask',
     createProxyMiddleware({
-      target: 'http://localhost:8001',
+      target: 'http://localhost:8000',
       changeOrigin: true,
     })
   );
   app.use(
     '/history',
     createProxyMiddleware({
-      target: 'http://localhost:8001',
+      target: 'http://localhost:8000',
+      changeOrigin: true,
+    })
+  );
+  app.use(
+    '/feedback',
+    createProxyMiddleware({
+      target: 'http://localhost:8000',
       changeOrigin: true,
     })
   );

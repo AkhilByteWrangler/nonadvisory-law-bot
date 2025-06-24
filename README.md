@@ -1,125 +1,126 @@
-# nonadvisory-law-bot
+# Nonadvisory Law Bot
 
-**nonadvisory-law-bot** is a real-time, voice-enabled legal information system designed for constrained, domain-specific question answering. The system integrates fine-tuned transformer-based language models with telephony infrastructure to enable spoken legal information retrieval—without providing legal advice.
+A modern, responsible legal information chat app with real citations, emoji feedback, and a beautiful iMessage-inspired UI. **No legal advice is provided**
 
 ---
 
-## Objective
+## Overview
 
-This system enables users to query publicly available legal knowledge (e.g., tenant rights, labor regulations) via a phone call interface. The goal is to:
+Nonadvisory Law Bot is a professional, real-time legal information system. It provides general legal information, resource citations, and feedback features in a modern chat interface. **It never provides legal advice.**
 
-- Demonstrate modular, MLOps-compliant deployment of fine-tuned LLMs.
-- Explore latency-constrained inference in speech-driven environments.
-- Provide a safe, non-advisory way to deliver legal information using voice and NLP.  
+---
 
-> This system is explicitly non-advisory and is not a substitute for a licensed attorney. See [`DISCLAIMER.md`](./DISCLAIMER.md).
+## Features
+
+- Modern chat UI (dark mode, animated, iMessage-style)
+- Login and landing pages (demo auth)
+- FastAPI backend with OpenAI & Gemini (Palm) LLMs
+- Resource/citation display with clickable links
+- Citation hallucination warnings
+- Emoji feedback on bot messages (with backend feedback endpoint)
+- Typing indicator, message status, and smart suggestions
+- Full API docs, deployment guide, user manual, and compliance docs
+
+---
+
+## Architecture
+
+- **Frontend:** React (chat UI, emoji feedback, resource citations, login/landing pages)
+- **Backend:** FastAPI (Python), OpenAI LLM, Brave Search API, Gemini (Palm API)
+- **State:** Conversation and feedback stored in memory (not persistent)
+- **Modules:**
+  - `backend/main.py`: FastAPI app, endpoints, LLM and search logic
+  - `backend/palm_api.py`: Gemini (Palm) chat logic
 
 ---
 
 ## System Architecture
 
-    ┌──────────────┐
-    │ Phone Caller │
-    └──────┬───────┘
-           │
-    Twilio Voice (Webhook)
-           │
-     ┌─────▼─────┐
-     │ Transcribe│  ← Whisper / Deepgram
-     └─────┬─────┘
-           │
-    ┌──────▼──────┐
-    │ Query Engine│ ← Fine-tuned LLM
-    └──────┬──────┘
-           │
-     ┌─────▼──────┐
-     │ Synthesize │ ← ElevenLabs / Bark
-     └─────┬──────┘
-           │
-    Respond via Twilio Voice
+![1750746616000](image/README/1750746616000.png)
 
+**Explanation:**
+
+- The user interacts with the React frontend via a modern chat UI in their browser.
+- The frontend communicates with the FastAPI backend using REST API calls (for chat, feedback, history, etc).
+- When a user asks a question, the backend:
+  - Queries the Brave Search API for relevant legal resources.
+  - Sends the user’s question and search context to OpenAI (Lexi) for a draft answer.
+  - Optionally sends the answer to Gemini (Juri) for review and improvement.
+  - Returns the final answer, citations, and discussion to the frontend.
+- The frontend displays the answer, clickable citations, and allows emoji feedback, which is sent back to the backend for analysis and improvement.
+- All state (chat, feedback) is stored in memory for demo purposes (no persistent storage).
 
 ---
 
-## Formal Model Definition
+## Quick Start
 
-Let:
+### Backend
 
-- xₜ ∈ ℝⁿ be the input audio waveform at time step t.
+1. See `DEPLOYMENT.md` for full setup.
+2. Install Python deps: `pip install -r backend/requirements.txt`
+3. Set up `.env` with your API keys (OpenAI, Brave Search)
+4. Run: `uvicorn backend.main:app --reload`
 
-- sₜ = STT(xₜ) be the transcribed text output from speech-to-text (STT).
+### Frontend
 
-- yₜ = f_θ(sₜ, hₜ) be the model’s predicted response given current input and context history.
-
-- aₜ = TTS(yₜ) be the audio synthesized from the generated response.
-
-The model is fine-tuned on a task-specific dataset 𝒟 = { (qᵢ, aᵢ) } for i = 1 to N, using the following objective:
-
-- L(θ) = Σᵢ CE(f_θ(qᵢ), aᵢ) + λ ⋅ DriftPenalty(f_θ).
-
-Where:
-
-- CE is the cross-entropy loss between predicted and target tokens.
-
-- DriftPenalty(f_θ) penalizes semantic deviation from domain-specific response formats and scope.
-
-- λ is a hyperparameter controlling regularization weight.
-
+1. `cd frontend && npm install && npm start`
+2. App runs at `http://localhost:3000` (proxy to backend)
 
 ---
 
-## Model
+## Usage Guide
 
-| Component         | Details |
-|------------------|---------|
-| Base Model       | `gpt2`, `mistral-7b`, or `falcon-7b-instruct` |
-| Fine-Tuning      | LoRA (4-bit PEFT) on legal Q&A corpus |
-| Training Tooling | Hugging Face `transformers`, `peft`, `datasets` |
-| Quantization     | 4-bit for low-latency CPU inference |
-| Target Latency   | < 2s per 100-token generation |
+1. Go to the landing page and log in (demo login).
+2. Enter your legal question in the chat input.
+3. View bot answers, resources, and citations.
+4. React to bot messages with emojis for feedback.
+5. Use smart suggestions for quick questions.
+6. Reset chat with the reset button.
 
----
-
-##  Dataset
-
-| Source | Examples |
-|--------|----------|
-| Public legal FAQs | gov websites (e.g., HUD.gov, FTC.gov) |
-| Synthetic | Rule-based dialogue generation |
-| Format | JSONL: `{ "input": "...", "output": "..." }` |
-| Filters | Off-topic removal, contradiction detection, consistency scoring |
+- All conversations are stored in memory (not persistent).
+- Feedback is used to improve future responses.
+- For legal advice, consult a qualified attorney.
 
 ---
 
-## Deployment
+## Testing & Coverage
 
-| Layer | Tech Stack |
-|-------|------------|
-| API Server | FastAPI |
-| TTS       | ElevenLabs (fallback: Bark, pyttsx3) |
-| STT       | OpenAI Whisper / Deepgram |
-| Telephony | Twilio Voice API (programmable webhook) |
-| Model Hosting | Local inference / Hugging Face Endpoint / Ollama |
-| Containerization | Docker (GPU and CPU variants) |
-| Monitoring | Logging middleware + call/session tracking |
+- Run all backend tests: `pytest --cov=backend --cov-report=term --cov-report=html`
+- See `tests/COVERAGE.md` for details
 
 ---
 
-## Setup (Coming Soon)
+## Documentation
 
-```bash
-git clone https://github.com/AkhilByteWrangler/nonadvisory-law-bot.git
-cd nonadvisory-law-bot
-pip install -r requirements.txt
-```
+- [API Docs](API_DOCS.md)
+- [Compliance](COMPLIANCE.md)
 
-## References
+---
 
-- Hu et al. 2021: LoRA - Low-Rank Adaptation of LLMs
-- OpenAI Whisper (Speech-to-Text): https://github.com/openai/whisper
-- Hugging Face Transformers: https://huggingface.co/docs/transformers
-- Twilio Programmable Voice: https://www.twilio.com/docs/voice
+## Security, Privacy & Responsible AI
 
+- All user input is sanitized and validated.
+- No sensitive data is logged or stored.
+- CORS is restricted to trusted origins (configure in FastAPI for production).
+- Use HTTPS in production.
+- API keys are stored in environment variables, never in code.
+- No personal data is stored or shared.
+- Conversation history is in-memory only (not persistent).
+- Feedback is anonymized and used only for improvement.
+- The bot never provides legal advice, only general information.
+- All answers include a disclaimer.
+- Citations are checked and hallucination warnings are shown in the UI.
+- Feedback is used to improve accuracy and reduce hallucinations.
+- Users are reminded to consult a qualified attorney for legal advice.
+- Not for use in production without further review for GDPR, CCPA, or other regulations if storing user data.
+- All LLM outputs are filtered for responsible use and ethical compliance.
+- See `DISCLAIMER.md` for legal and ethical usage terms.
 
+---
 
+## License & Disclaimer
 
+See `LICENSE` for details.
+
+**Disclaimer:**
+This system is **not a lawyer** and does **not provide legal advice**. The responses generated by Nonadvisory Law Bot are based on publicly available legal information and may be incomplete, outdated, or inaccurate. **This tool is for informational and research purposes only.** Always consult a qualified legal professional for legal advice regarding your specific situation. Use of this system does not establish any attorney-client relationship.

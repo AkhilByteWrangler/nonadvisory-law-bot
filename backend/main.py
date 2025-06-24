@@ -6,8 +6,16 @@ from palm_api import palm_chat
 from dotenv import load_dotenv
 import time
 import requests
+from fastapi import Request
+from fastapi.responses import JSONResponse
+import logging
+from typing import List, Dict, Any
 
-app = FastAPI()
+app = FastAPI(
+    title="Nonadvisory Law Bot API",
+    description="A FastAPI backend for a responsible, non-advisory legal information chatbot with citation, feedback, and resource tracking.",
+    version="1.0.0"
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -27,12 +35,15 @@ BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 DISCLAIMER = "This response is for general informational purposes only and does not constitute legal advice. For legal advice, please consult a qualified attorney."
 
 class QueryRequest(BaseModel):
+    """Request model for /ask endpoint."""
     question: str
 
 class QueryResponse(BaseModel):
+    """Response model for /ask endpoint, includes answer, disclaimer, discussion, and timestamp."""
     answer: str
     disclaimer: str
-    discussion: list = []  # Add discussion to the response
+    discussion: list = []
+    timestamp: int
 
 # Store conversation history in memory 
 conversation_history = []
@@ -40,13 +51,20 @@ conversation_history = []
 # Track if Lexi's intro has been used in this session
 lexi_intro_used = False
 
-@app.post("/ask", response_model=QueryResponse)
+@app.post("/ask", response_model=QueryResponse, responses={500: {"description": "Internal server error"}})
 def ask_bot(request: QueryRequest):
+    """
+    Handles user legal questions, queries LLM and web search, returns answer, discussion, and timestamp.
+    """
     global lexi_intro_used
     if not OPENAI_API_KEY:
+        logging.error("OpenAI API key not set.")
         raise HTTPException(status_code=500, detail="OpenAI API key not set.")
-    # Always query Brave Search API for every question
-    web_results = brave_web_search(request.question, num_results=5)
+    try:
+        web_results = brave_web_search(request.question, num_results=5)
+    except Exception as e:
+        logging.error(f"Brave Search error: {e}")
+        web_results = []
     web_citations = "\n".join([
         f"{idx+1}. [{res['title']}]({res['url']}) - {res['snippet']}" for idx, res in enumerate(web_results)
     ])
@@ -95,8 +113,6 @@ Your response (do not give legal advice):
             return f"{text}\n\n{DISCLAIMER}"
         return text
 
-    # Remove Lexi intro logic, handle in prompt only
-
     try:
         openai_response = client.chat.completions.create(model="gpt-3.5-turbo",
         messages=[{"role": "system", "content": prompt}],
@@ -115,8 +131,9 @@ Your response (do not give legal advice):
                 for idx, res in enumerate(web_results) 
                 if (idx+1) in used_citations and res["title"] and res["url"]
             ]
-            print(f"Found {len(used_urls)} resources for {len(used_citations)} citations")
+            logging.info(f"Found {len(used_urls)} resources for {len(used_citations)} citations")
     except Exception as e:
+        logging.error(f"OpenAI error: {e}")
         raise HTTPException(status_code=500, detail=f"OpenAI error: {str(e)}")
 
     # Discriminator: Juri (Gemini)
@@ -167,26 +184,30 @@ You are Lexi, the Nonadvisory-Law-Bot, a brilliant, witty, and slightly dramatic
         discussion.append({"generator": answer, "discriminator": f"Gemini error: {str(e)}"})
 
     # Add to conversation history with timestamp
+    ts = int(time.time() * 1000)
     conversation_history.append({
         "user": request.question,
         "discussion": discussion,
         "final_answer": final_answer,
-        "resources": used_urls,  # Add used URLs for frontend dropdown
-        "timestamp": int(time.time() * 1000)
+        "resources": used_urls,
+        "timestamp": ts
     })
-    return QueryResponse(answer=final_answer, disclaimer=DISCLAIMER, discussion=discussion)
+    return QueryResponse(answer=final_answer, disclaimer=DISCLAIMER, discussion=discussion, timestamp=ts)
 
-@app.get("/history")
+@app.get("/history", response_model=List[Dict[str, Any]])
 def get_history():
+    """Returns the full conversation history."""
     return conversation_history
 
 @app.delete("/history")
 async def clear_history():
+    """Clears the conversation history."""
     global conversation_history
     conversation_history = []
     return {"status": "success"}
 
-def brave_web_search(query, num_results=5):
+def brave_web_search(query: str, num_results: int = 5) -> list:
+    """Performs a Brave web search and returns a list of results."""
     if not BRAVE_API_KEY:
         return []
     headers = {
@@ -209,4 +230,75 @@ def brave_web_search(query, num_results=5):
             })
         return results
     except Exception as e:
+        logging.error(f"Brave web search failed: {e}")
         return []
+
+class FeedbackRequest(BaseModel):
+    """Request model for /feedback endpoint."""
+    message: str
+    emoji: str
+    timestamp: int
+
+class FeedbackResponse(BaseModel):
+    """Response model for /feedback endpoint."""
+    reply: str
+
+# Store feedback for future improvement
+future_improvement_feedback = []
+
+@app.post("/feedback", response_model=FeedbackResponse, responses={500: {"description": "Internal server error"}})
+def feedback_endpoint(request: FeedbackRequest):
+    """
+    Accepts feedback (emoji reaction) for a bot message and lets the LLM generate a response.
+    Also stores actionable improvement feedback in an array.
+    """
+    emoji = request.emoji
+    user_message = request.message
+    # Gather last 5 exchanges for context
+    history_context = conversation_history[-5:] if len(conversation_history) > 0 else []
+    history_str = "\n".join([
+        f"User: {item['user']}\nBot: {item['final_answer']}" for item in history_context
+    ])
+    prompt = (
+        f"A user reacted to the following bot response with the emoji '{emoji}':\n"
+        f"Bot response: {user_message}\n"
+        f"Recent conversation history:\n{history_str}\n"
+        f"As the bot, decipher the user's feedback and ask actionable, specific questions to improve future responses. "
+        f"If the feedback is positive, thank the user and ask if there's anything else to improve. "
+        f"If the feedback is negative or confused, ask for clarification and what could be improved. "
+        f"Be concise, human-like, and always try to get actionable feedback.\n"
+        f"\nIMPORTANT: Your response MUST be in this format:\n"
+        f"Reply: <your conversational reply to the user>\n"
+        f"future improvement feedback: <actionable suggestions or 'None'>\n"
+    )
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "system", "content": "You are Lexi, a helpful legal assistant."},
+                      {"role": "user", "content": prompt}],
+            max_tokens=180,
+            temperature=0.7
+        )
+        reply = completion.choices[0].message.content.strip()
+
+        # Parse reply and actionable feedback
+        import re
+        reply_match = re.search(r"Reply:(.*?)(?:future improvement feedback:|$)", reply, re.IGNORECASE | re.DOTALL)
+        feedback_match = re.search(r"future improvement feedback:(.*)", reply, re.IGNORECASE | re.DOTALL)
+        user_reply = reply_match.group(1).strip() if reply_match else reply
+        actionable = feedback_match.group(1).strip() if feedback_match else None
+        logging.info(f"Parsed user_reply: {user_reply}")
+        logging.info(f"Parsed actionable: {actionable}")
+        if actionable and actionable.lower() != 'none':
+            future_improvement_feedback.append(actionable)
+    except Exception as e:
+        logging.error(f"Feedback endpoint exception: {e}")
+        user_reply = "Thank you for your feedback!"
+    return {"reply": user_reply}
+
+@app.get("/feedback")
+def get_feedback():
+    """
+    Returns all actionable feedback suggestions stored so far.
+    """
+    return JSONResponse(content={"future_improvement_feedback": future_improvement_feedback})
